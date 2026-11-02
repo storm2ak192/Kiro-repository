@@ -28,8 +28,9 @@ android {
         shaders = false
     }
 
-    kotlinOptions {
-        freeCompilerArgs += "-opt-in=kotlinx.serialization.ExperimentalSerializationApi"
+    kotlin {
+    compilerOptions {
+        optIn.add("kotlinx.serialization.ExperimentalSerializationApi")
     }
 }
 
