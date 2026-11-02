@@ -1,56 +1,59 @@
 plugins {
-    id("com.android.library")
-    kotlin("android")
-    id("kotlinx-serialization")
-    id("org.jmailen.kotlinter")
+id("com.android.library")
+kotlin("android")
+id("kotlinx-serialization")
+id("org.jmailen.kotlinter")
 }
 
 android {
-    compileSdk = AndroidConfig.compileSdk
+compileSdk = AndroidConfig.compileSdk
 
-    defaultConfig {
-        minSdk = AndroidConfig.minSdk
-    }
+defaultConfig {
+    minSdk = AndroidConfig.minSdk
+}
 
-    namespace = "eu.kanade.tachiyomi.multisrc.${project.name}"
+namespace = "eu.kanade.tachiyomi.multisrc.${project.name}"
 
-    sourceSets {
-        named("main") {
-            manifest.srcFile("AndroidManifest.xml")
-            java.setSrcDirs(listOf("src"))
-            res.setSrcDirs(listOf("res"))
-            assets.setSrcDirs(listOf("assets"))
-        }
-    }
-
-    buildFeatures {
-        resValues = false
-        shaders = false
-    }
-
-    kotlin {
-    compilerOptions {
-        optIn.add("kotlinx.serialization.ExperimentalSerializationApi")
+sourceSets {
+    named("main") {
+        manifest.srcFile("AndroidManifest.xml")
+        java.setSrcDirs(listOf("src"))
+        res.setSrcDirs(listOf("res"))
+        assets.setSrcDirs(listOf("assets"))
     }
 }
 
+buildFeatures {
+    resValues = false
+    shaders = false
+}
+
+}
+
+kotlin {
+compilerOptions {
+optIn.add("kotlinx.serialization.ExperimentalSerializationApi")
+}
+}
+
 versionCatalogs
-    .named("libs")
-    .findBundle("common")
-    .ifPresent { common ->
-        dependencies {
-            compileOnly(common)
-        }
-    }
+.named("libs")
+.findBundle("common")
+.ifPresent { common ->
+dependencies {
+compileOnly(common)
+}
+}
 
 tasks {
-    preBuild {
-        dependsOn(lintKotlin)
-    }
+preBuild {
+dependsOn(lintKotlin)
+}
 
-    if (System.getenv("CI") != "true") {
-        lintKotlin {
-            dependsOn(formatKotlin)
-        }
+if (System.getenv("CI") != "true") {
+    lintKotlin {
+        dependsOn(formatKotlin)
     }
+}
+
 }
