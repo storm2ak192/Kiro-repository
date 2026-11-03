@@ -34,7 +34,7 @@ class Anime3rb : AnimeHttpSource() {
 
     private val userAgent =
         "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 " +
-        "(KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+            "(KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
 
     override fun headersBuilder(): Headers.Builder =
         Headers.Builder()
@@ -42,15 +42,15 @@ class Anime3rb : AnimeHttpSource() {
             .add("Referer", "$baseUrl/")
             .add("Accept-Language", "ar,en-US;q=0.9,en;q=0.8")
 
+    // Convert any URL into an absolute URL.
     private fun absoluteUrl(value: String?): String {
-
         val raw = value.orEmpty().trim()
 
         if (raw.isBlank()) return ""
 
         return when {
             raw.startsWith("https://") ||
-            raw.startsWith("http://") -> raw
+                raw.startsWith("http://") -> raw
 
             raw.startsWith("//") -> "https:$raw"
 
@@ -58,6 +58,16 @@ class Anime3rb : AnimeHttpSource() {
 
             else -> "$baseUrl/$raw"
         }
+    }
+
+    // Store internal anime and episode URLs as relative URLs.
+    // Aniyomi automatically combines them with baseUrl.
+    private fun relativeUrl(value: String?): String {
+        val absolute = absoluteUrl(value)
+
+        if (absolute.isBlank()) return ""
+
+        return absolute.removePrefix(baseUrl).ifBlank { "/" }
     }
 
     private fun cleanTitle(value: String): String =
@@ -69,7 +79,6 @@ class Anime3rb : AnimeHttpSource() {
             .trim()
 
     private fun imageUrl(element: Element): String {
-
         val image = element.selectFirst("img") ?: return ""
 
         val value = sequenceOf(
@@ -92,12 +101,12 @@ class Anime3rb : AnimeHttpSource() {
             element.selectFirst(titleSelector)?.text().orEmpty()
         )
 
-        val url = absoluteUrl(element.attr("href"))
+        // Important: anime URLs must be relative inside Aniyomi.
+        val url = relativeUrl(element.attr("href"))
 
         if (title.isBlank() || url.isBlank()) return null
 
         return SAnime.create().apply {
-
             this.url = url
 
             this.title = title
@@ -111,7 +120,6 @@ class Anime3rb : AnimeHttpSource() {
     }
 
     private fun document(response: Response): Document {
-
         return Jsoup.parse(
             response.body?.string().orEmpty(),
             response.request.url.toString()
@@ -119,11 +127,10 @@ class Anime3rb : AnimeHttpSource() {
     }
 
     private fun hasNextPage(doc: Document): Boolean {
-
         return doc.selectFirst(
             "a[rel=next], " +
-            ".pagination a[aria-label*=التالي], " +
-            ".pagination a:contains(التالي)"
+                ".pagination a[aria-label*=التالي], " +
+                ".pagination a:contains(التالي)"
         ) != null
     }
 
@@ -132,7 +139,6 @@ class Anime3rb : AnimeHttpSource() {
     // --------------------------------------------------
 
     override fun popularAnimeRequest(page: Int): Request {
-
         return Request.Builder()
             .url("$baseUrl/titles/list?page=$page")
             .headers(headers)
@@ -170,7 +176,6 @@ class Anime3rb : AnimeHttpSource() {
     }
 
     override fun latestUpdatesRequest(page: Int): Request {
-
         return Request.Builder()
             .url("$baseUrl/")
             .headers(headers)
@@ -393,7 +398,8 @@ class Anime3rb : AnimeHttpSource() {
 
         return SAnime.create().apply {
 
-            url = response.request.url.toString()
+            // Important: keep the anime URL relative.
+            url = relativeUrl(response.request.url.toString())
 
             this.title = cleanTitle(
                 title.ifBlank { rawTitle }
@@ -419,8 +425,9 @@ class Anime3rb : AnimeHttpSource() {
 
     override fun episodeListRequest(anime: SAnime): Request {
 
+        // Convert the stored relative URL into an absolute request URL.
         return Request.Builder()
-            .url(anime.url)
+            .url(absoluteUrl(anime.url))
             .headers(headers)
             .get()
             .build()
@@ -448,9 +455,8 @@ class Anime3rb : AnimeHttpSource() {
         element: Element
     ): SEpisode {
 
-        val url = absoluteUrl(
-            element.attr("href")
-        )
+        // Episode URLs must also be relative inside Aniyomi.
+        val url = relativeUrl(element.attr("href"))
 
         val data = element.selectFirst(".video-data")
 
@@ -491,9 +497,8 @@ class Anime3rb : AnimeHttpSource() {
     // --------------------------------------------------
 
     override fun hosterListRequest(episode: SEpisode): Request {
-
         return Request.Builder()
-            .url(episode.url)
+            .url(absoluteUrl(episode.url))
             .headers(headers)
             .get()
             .build()
@@ -505,7 +510,7 @@ class Anime3rb : AnimeHttpSource() {
 
         val pattern = Regex(
             "https:(?:\\\\/|/){2}video\\.vid3rb\\.com" +
-            "(?:\\\\/|/)player(?:\\\\/|/)[^\\\"']+"
+                "(?:\\\\/|/)player(?:\\\\/|/)[^\\\"']+"
         )
 
         val playerUrl = pattern.find(html)
