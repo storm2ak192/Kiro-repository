@@ -113,7 +113,6 @@ configurations.all {
 }
 
 tasks.register("writeManifestFile") {
-tasks.register("writeManifestFile") {
     doLast {
         def manifest = android.sourceSets.getByName("main").manifest
 
