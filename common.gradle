@@ -113,15 +113,22 @@ configurations.all {
 }
 
 tasks.register("writeManifestFile") {
+tasks.register("writeManifestFile") {
     doLast {
         def manifest = android.sourceSets.getByName("main").manifest
+
         if (!manifest.srcFile.exists()) {
             File tempFile = layout.buildDirectory.get().file("tempAndroidManifest.xml").getAsFile()
+
+            // Create the build directory before writing the manifest.
+            tempFile.parentFile.mkdirs()
+
             if (!tempFile.exists()) {
-                tempFile.withWriter {
+                tempFile.withWriter("UTF-8") {
                     it.write('<?xml version="1.0" encoding="utf-8"?>\n<manifest />\n')
                 }
             }
+
             manifest.srcFile(tempFile.path)
         }
     }
