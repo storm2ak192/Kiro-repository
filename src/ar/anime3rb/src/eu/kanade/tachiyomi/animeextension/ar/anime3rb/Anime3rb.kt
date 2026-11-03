@@ -42,7 +42,6 @@ class Anime3rb : AnimeHttpSource() {
             .add("Referer", "$baseUrl/")
             .add("Accept-Language", "ar,en-US;q=0.9,en;q=0.8")
 
-    // Convert any URL into an absolute URL.
     private fun absoluteUrl(value: String?): String {
         val raw = value.orEmpty().trim()
 
@@ -58,16 +57,6 @@ class Anime3rb : AnimeHttpSource() {
 
             else -> "$baseUrl/$raw"
         }
-    }
-
-    // Store internal anime and episode URLs as relative URLs.
-    // Aniyomi automatically combines them with baseUrl.
-    private fun relativeUrl(value: String?): String {
-        val absolute = absoluteUrl(value)
-
-        if (absolute.isBlank()) return ""
-
-        return absolute.removePrefix(baseUrl).ifBlank { "/" }
     }
 
     private fun cleanTitle(value: String): String =
@@ -101,20 +90,15 @@ class Anime3rb : AnimeHttpSource() {
             element.selectFirst(titleSelector)?.text().orEmpty()
         )
 
-        // Important: anime URLs must be relative inside Aniyomi.
-        val url = relativeUrl(element.attr("href"))
+        val url = absoluteUrl(element.attr("href"))
 
         if (title.isBlank() || url.isBlank()) return null
 
         return SAnime.create().apply {
             this.url = url
-
             this.title = title
-
             thumbnail_url = imageUrl(element).ifBlank { null }
-
             fetch_type = FetchType.Episodes
-
             initialized = false
         }
     }
@@ -147,7 +131,6 @@ class Anime3rb : AnimeHttpSource() {
     }
 
     override fun popularAnimeParse(response: Response): AnimesPage {
-
         val doc = document(response)
 
         val entries = doc.select("a.simple-title-card")
@@ -167,7 +150,6 @@ class Anime3rb : AnimeHttpSource() {
     // --------------------------------------------------
 
     override suspend fun getLatestUpdates(page: Int): AnimesPage {
-
         if (page > 1) {
             return AnimesPage(emptyList(), false)
         }
@@ -184,7 +166,6 @@ class Anime3rb : AnimeHttpSource() {
     }
 
     override fun latestUpdatesParse(response: Response): AnimesPage {
-
         val doc = document(response)
 
         val entries = doc.select("#videos a.video-card")
@@ -211,7 +192,6 @@ class Anime3rb : AnimeHttpSource() {
         }
 
         return try {
-
             val homeRequest = Request.Builder()
                 .url("$baseUrl/")
                 .headers(headers)
@@ -314,7 +294,6 @@ class Anime3rb : AnimeHttpSource() {
             AnimesPage(entries, false)
 
         } catch (_: Exception) {
-
             AnimesPage(emptyList(), false)
         }
     }
@@ -342,7 +321,6 @@ class Anime3rb : AnimeHttpSource() {
     }
 
     override fun searchAnimeParse(response: Response): AnimesPage {
-
         val doc = document(response)
 
         val entries = doc.select("a.simple-title-card")
@@ -397,9 +375,7 @@ class Anime3rb : AnimeHttpSource() {
             .distinct()
 
         return SAnime.create().apply {
-
-            // Important: keep the anime URL relative.
-            url = relativeUrl(response.request.url.toString())
+            url = response.request.url.toString()
 
             this.title = cleanTitle(
                 title.ifBlank { rawTitle }
@@ -424,10 +400,8 @@ class Anime3rb : AnimeHttpSource() {
     // --------------------------------------------------
 
     override fun episodeListRequest(anime: SAnime): Request {
-
-        // Convert the stored relative URL into an absolute request URL.
         return Request.Builder()
-            .url(absoluteUrl(anime.url))
+            .url(anime.url)
             .headers(headers)
             .get()
             .build()
@@ -455,8 +429,9 @@ class Anime3rb : AnimeHttpSource() {
         element: Element
     ): SEpisode {
 
-        // Episode URLs must also be relative inside Aniyomi.
-        val url = relativeUrl(element.attr("href"))
+        val url = absoluteUrl(
+            element.attr("href")
+        )
 
         val data = element.selectFirst(".video-data")
 
@@ -477,7 +452,6 @@ class Anime3rb : AnimeHttpSource() {
             .toFloatOrNull()
 
         return SEpisode.create().apply {
-
             this.url = url
 
             name = cleanTitle(
@@ -496,10 +470,35 @@ class Anime3rb : AnimeHttpSource() {
     // HOSTER EXTRACTION
     // --------------------------------------------------
 
+    private fun decodeUrl(value: String): String {
+        return value
+            .replace("&amp;", "&")
+            .replace("&#38;", "&")
+            .replace("\\/", "/")
+            .replace("\\u0026", "&")
+            .replace("\\", "")
+            .trim()
+    }
+
+    private fun appendParameter(
+        url: String,
+        name: String,
+        value: String
+    ): String {
+
+        val separator = if (url.contains("?")) "&" else "?"
+
+        return "$url$separator$name=$value"
+    }
+
     override fun hosterListRequest(episode: SEpisode): Request {
         return Request.Builder()
-            .url(absoluteUrl(episode.url))
-            .headers(headers)
+            .url(episode.url)
+            .headers(
+                headers.newBuilder()
+                    .set("Referer", "$baseUrl/")
+                    .build()
+            )
             .get()
             .build()
     }
@@ -508,17 +507,88 @@ class Anime3rb : AnimeHttpSource() {
 
         val html = response.body?.string().orEmpty()
 
-        val pattern = Regex(
-            "https:(?:\\\\/|/){2}video\\.vid3rb\\.com" +
-                "(?:\\\\/|/)player(?:\\\\/|/)[^\\\"']+"
+        if (html.isBlank()) return emptyList()
+
+        val doc = Jsoup.parse(
+            html,
+            response.request.url.toString()
         )
 
-        val playerUrl = pattern.find(html)
-            ?.value
-            ?.replace("\\", "")
-            ?.replace("&amp;", "&")
-            ?.replace("\\u0026", "&")
-            ?: return emptyList()
+        // الطريقة الأساسية:
+        // استخراج رابط المشغل من data-video-source.
+
+        val dataSource = doc
+            .selectFirst("[data-video-source]")
+            ?.attr("data-video-source")
+            .orEmpty()
+
+        // طريقة بديلة في حالة وجود الرابط داخل HTML مباشرة.
+
+        val fallbackSource = Regex(
+            """data-video-source\s*=\s*["']([^"']+)["']"""
+        )
+            .find(html)
+            ?.groupValues
+            ?.getOrNull(1)
+            .orEmpty()
+
+        var playerUrl = decodeUrl(
+            dataSource.ifBlank { fallbackSource }
+        )
+
+        if (playerUrl.isBlank()) {
+            return emptyList()
+        }
+
+        playerUrl = absoluteUrl(playerUrl)
+
+        // استخراج معاملات المشغل من JavaScript.
+
+        val cinema = Regex(
+            """searchParams\.append\(\s*['"]cinema['"]\s*,\s*(\d+)\s*\)"""
+        )
+            .find(html)
+            ?.groupValues
+            ?.getOrNull(1)
+
+        val last = Regex(
+            """searchParams\.append\(\s*['"]last['"]\s*,\s*(\d+)\s*\)"""
+        )
+            .find(html)
+            ?.groupValues
+            ?.getOrNull(1)
+
+        // إضافة المعاملات عند وجودها فقط.
+
+        if (
+            cinema != null &&
+            !playerUrl.contains("cinema=")
+        ) {
+            playerUrl = appendParameter(
+                playerUrl,
+                "cinema",
+                cinema
+            )
+        }
+
+        if (
+            last != null &&
+            !playerUrl.contains("last=")
+        ) {
+            playerUrl = appendParameter(
+                playerUrl,
+                "last",
+                last
+            )
+        }
+
+        if (!playerUrl.contains("next-image=")) {
+            playerUrl = appendParameter(
+                playerUrl,
+                "next-image",
+                "undefined"
+            )
+        }
 
         return listOf(
             Hoster(
@@ -538,26 +608,19 @@ class Anime3rb : AnimeHttpSource() {
             .url(hoster.hosterUrl)
             .headers(
                 headers.newBuilder()
-                    .set(
-                        "Referer",
-                        "$baseUrl/"
-                    )
+                    .set("Referer", hoster.hosterUrl)
                     .build()
             )
             .get()
             .build()
     }
 
-    override fun videoListParse(
-        response: Response,
-        hoster: Hoster
+    private fun extractJsonVideoSources(
+        html: String
     ): List<Video> {
 
-        val html = response.body?.string().orEmpty()
-
         val match = Regex(
-            "var\\s+video_sources\\s*=\\s*(\\[.*?]);",
-            RegexOption.DOT_MATCHES_ALL
+            """var\s+video_sources\s*=\s*(\[[\s\S]*?]);"""
         ).find(html) ?: return emptyList()
 
         return try {
@@ -573,10 +636,9 @@ class Anime3rb : AnimeHttpSource() {
                     val item = sources.optJSONObject(index)
                         ?: continue
 
-                    val sourceUrl = item.optString("src")
-                        .replace("\\", "")
-                        .replace("&amp;", "&")
-                        .replace("\\u0026", "&")
+                    val sourceUrl = decodeUrl(
+                        item.optString("src")
+                    )
 
                     if (
                         sourceUrl.isBlank() ||
@@ -590,17 +652,14 @@ class Anime3rb : AnimeHttpSource() {
                         "Auto"
                     )
 
-                    val resolution = Regex("\\d+")
+                    val resolution = Regex("""\d+""")
                         .find(label)
                         ?.value
                         ?.toIntOrNull()
 
                     val videoHeaders = Headers.Builder()
                         .add("User-Agent", userAgent)
-                        .add(
-                            "Referer",
-                            "https://video.vid3rb.com/"
-                        )
+                        .add("Referer", "$baseUrl/")
                         .build()
 
                     add(
@@ -614,13 +673,118 @@ class Anime3rb : AnimeHttpSource() {
                         )
                     )
                 }
-            }.distinctBy {
-                it.videoUrl
             }
 
         } catch (_: Exception) {
-
             emptyList()
         }
+    }
+
+    private fun extractJavaScriptVideoSources(
+        html: String
+    ): List<Video> {
+
+        val match = Regex(
+            """var\s+videos\s*=\s*(\[[\s\S]*?]);"""
+        ).find(html) ?: return emptyList()
+
+        val arrayContent = match.groupValues[1]
+
+        // استخراج كل عنصر من عناصر المصفوفة.
+
+        val objects = Regex(
+            """\{[^{}]*}"""
+        ).findAll(arrayContent)
+
+        return buildList {
+
+            for (objectMatch in objects) {
+
+                val item = objectMatch.value
+
+                // استخراج رابط الفيديو.
+
+                val source = Regex(
+                    """\bsrc\s*:\s*(['"])(.*?)\1"""
+                )
+                    .find(item)
+                    ?.groupValues
+                    ?.getOrNull(2)
+                    .orEmpty()
+
+                // استخراج الجودة.
+
+                val label = Regex(
+                    """\blabel\s*:\s*(['"])(.*?)\1"""
+                )
+                    .find(item)
+                    ?.groupValues
+                    ?.getOrNull(2)
+                    .orEmpty()
+
+                val sourceUrl = decodeUrl(source)
+
+                if (sourceUrl.isBlank()) {
+                    continue
+                }
+
+                val quality = label.ifBlank { "Auto" }
+
+                val resolution = Regex("""\d+""")
+                    .find(quality)
+                    ?.value
+                    ?.toIntOrNull()
+
+                val videoHeaders = Headers.Builder()
+                    .add("User-Agent", userAgent)
+                    .add("Referer", "$baseUrl/")
+                    .build()
+
+                add(
+                    Video(
+                        videoUrl = sourceUrl,
+                        videoTitle = "Anime3rb $quality",
+                        resolution = resolution,
+                        headers = videoHeaders,
+                        preferred = resolution != null &&
+                            resolution >= 720
+                    )
+                )
+            }
+        }
+    }
+
+    override fun videoListParse(
+        response: Response,
+        hoster: Hoster
+    ): List<Video> {
+
+        val html = response.body?.string().orEmpty()
+
+        if (html.isBlank()) {
+            return emptyList()
+        }
+
+        // تجربة صيغة videos أولاً.
+
+        val javascriptVideos = extractJavaScriptVideoSources(html)
+
+        if (javascriptVideos.isNotEmpty()) {
+            return javascriptVideos.distinctBy {
+                it.videoUrl
+            }
+        }
+
+        // تجربة صيغة video_sources كبديل.
+
+        val jsonVideos = extractJsonVideoSources(html)
+
+        if (jsonVideos.isNotEmpty()) {
+            return jsonVideos.distinctBy {
+                it.videoUrl
+            }
+        }
+
+        return emptyList()
     }
 }
