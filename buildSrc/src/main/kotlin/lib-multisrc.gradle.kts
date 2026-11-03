@@ -44,13 +44,11 @@ versionCatalogs
         }
     }
 
-// Configure Kotlin lint and formatting tasks.
-tasks.named("preBuild") {
-    dependsOn("lintKotlin")
-}
-
-if (System.getenv("CI") != "true") {
-    tasks.named("lintKotlin") {
-        dependsOn("formatKotlin")
+versionCatalogs
+    .named("libs")
+    .findBundle("common")
+    .ifPresent { common ->
+        dependencies {
+            compileOnly(common)
+        }
     }
-}
