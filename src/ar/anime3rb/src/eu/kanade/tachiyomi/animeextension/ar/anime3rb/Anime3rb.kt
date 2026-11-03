@@ -47,27 +47,34 @@ class Anime3rb : AnimeHttpSource() {
 
         if (raw.isBlank()) return ""
 
-        raw = raw
+        raw = Parser.unescapeEntities(raw, false)
             .replace("\\/", "/")
             .replace("\\u002F", "/")
             .replace("\\u002f", "/")
-            .replace("&amp;", "&")
-            .replace("&#38;", "&")
+            .replace("\\u0026", "&")
+            .replace("\\", "")
             .trim()
+            .removeSurrounding("\"")
+            .removeSurrounding("'")
 
-        // إصلاح حالة التصاق اسم الموقع ببداية رابط خارجي.
+        // إصلاح الروابط التي التصق بها اسم الموقع ببداية رابط آخر.
         raw = raw.replace(
-            Regex("""(?i)^https?://anime3rb\.com(?=https?://)"""),
+            Regex("""(?i)^(?:https?://)?(?:www\.)?anime3rb\.com(?=https?:)"""),
             ""
         )
 
+        // إصلاح بادئة البروتوكول غير المكتملة.
         raw = raw.replace(
-            Regex("""(?i)^anime3rb\.com(?=https?://)"""),
-            ""
+            Regex("""(?i)^https:/([^/])"""),
+            "https://$1"
         )
 
-        // إذا احتوى النص على أكثر من بداية رابط،
-        // نحتفظ بآخر رابط فعلي.
+        raw = raw.replace(
+            Regex("""(?i)^http:/([^/])"""),
+            "http://$1"
+        )
+
+        // استخراج الرابط الفعلي إذا كان النص يحتوي على أكثر من رابط.
         val httpsIndex = raw.lastIndexOf("https://")
         val httpIndex = raw.lastIndexOf("http://")
         val lastUrlIndex = maxOf(httpsIndex, httpIndex)
@@ -77,8 +84,10 @@ class Anime3rb : AnimeHttpSource() {
         }
 
         return when {
-            raw.startsWith("https://") ||
-                raw.startsWith("http://") -> raw
+            raw.isBlank() -> ""
+
+            raw.startsWith("https://", true) ||
+                raw.startsWith("http://", true) -> raw
 
             raw.startsWith("//") -> "https:$raw"
 
@@ -102,6 +111,7 @@ class Anime3rb : AnimeHttpSource() {
         val value = sequenceOf(
             "data-src",
             "data-lazy-src",
+            "data-original",
             "src"
         )
             .map { image.attr(it) }
@@ -115,10 +125,16 @@ class Anime3rb : AnimeHttpSource() {
         titleSelector: String
     ): SAnime? {
         val title = cleanTitle(
-            element.selectFirst(titleSelector)?.text().orEmpty()
+            element.selectFirst(titleSelector)?.text()
+                ?: element.attr("title")
         )
 
-        val url = absoluteUrl(element.attr("href"))
+        val rawUrl = element.attr("href")
+            .ifBlank {
+                element.selectFirst("a[href]")?.attr("href").orEmpty()
+            }
+
+        val url = absoluteUrl(rawUrl)
 
         if (title.isBlank() || url.isBlank()) return null
 
@@ -378,7 +394,7 @@ class Anime3rb : AnimeHttpSource() {
             .distinct()
 
         return SAnime.create().apply {
-            url = response.request.url.toString()
+            url = absoluteUrl(response.request.url.toString())
 
             this.title = cleanTitle(
                 title.ifBlank { rawTitle }
@@ -398,9 +414,15 @@ class Anime3rb : AnimeHttpSource() {
     // --------------------------------------------------
 
     override fun episodeListRequest(anime: SAnime): Request {
+        val animeUrl = absoluteUrl(anime.url)
+
         return Request.Builder()
-            .url(anime.url)
-            .headers(headers)
+            .url(animeUrl)
+            .headers(
+                headers.newBuilder()
+                    .set("Referer", "$baseUrl/")
+                    .build()
+            )
             .get()
             .build()
     }
@@ -408,20 +430,41 @@ class Anime3rb : AnimeHttpSource() {
     override fun episodeListParse(response: Response): List<SEpisode> {
         val doc = document(response)
 
-        return doc.select(".video-list a")
-            .asReversed()
-            .mapNotNull { element ->
-                val episode = parseEpisodeElement(element)
+        // الطريقة الأساسية.
+        val primary = doc.select(
+            ".video-list a[href], " +
+                ".episodes-list a[href], " +
+                ".episodes a[href], " +
+                ".episode-list a[href]"
+        )
 
-                episode.url.takeIf { it.isNotBlank() }?.let {
-                    episode
-                }
+        // بديل: استخراج أي رابط يشير إلى صفحة حلقة.
+        val fallback = doc.select(
+            "a[href*=/episode/]"
+        )
+
+        val elements = (primary + fallback)
+            .distinctBy { absoluteUrl(it.attr("href")) }
+            .filter {
+                absoluteUrl(it.attr("href"))
+                    .contains("/episode/")
             }
+
+        return elements
+            .mapNotNull { element ->
+                parseEpisodeElement(element)
+            }
+            .filter { it.url.isNotBlank() }
+            .distinctBy { it.url }
+            .asReversed()
     }
 
     private fun parseEpisodeElement(element: Element): SEpisode {
         val url = absoluteUrl(element.attr("href"))
-        val data = element.selectFirst(".video-data")
+
+        val data = element.selectFirst(
+            ".video-data, .episode-data, .episode-info"
+        )
 
         val episodeText = data
             ?.children()
@@ -435,19 +478,55 @@ class Anime3rb : AnimeHttpSource() {
             ?.text()
             .orEmpty()
 
-        val number = episodeText
-            .filter { it.isDigit() }
+        val completeText = cleanTitle(
+            element.text()
+                .ifBlank { element.attr("title") }
+        )
+
+        val numberText = Regex(
+            """(?:الحلقة|episode|ep)\s*([0-9٠-٩۰-۹]+)""",
+            RegexOption.IGNORE_CASE
+        )
+            .find("$episodeText $completeText")
+            ?.groupValues
+            ?.getOrNull(1)
+            .orEmpty()
+
+        val normalizedNumber = numberText
+            .replace('٠', '0')
+            .replace('١', '1')
+            .replace('٢', '2')
+            .replace('٣', '3')
+            .replace('٤', '4')
+            .replace('٥', '5')
+            .replace('٦', '6')
+            .replace('٧', '7')
+            .replace('٨', '8')
+            .replace('٩', '9')
+            .replace('۰', '0')
+            .replace('۱', '1')
+            .replace('۲', '2')
+            .replace('۳', '3')
+            .replace('۴', '4')
+            .replace('۵', '5')
+            .replace('۶', '6')
+            .replace('۷', '7')
+            .replace('۸', '8')
+            .replace('۹', '9')
+
+        val number = normalizedNumber
             .toFloatOrNull()
+
+        val finalName = cleanTitle(
+            episodeName
+                .ifBlank { completeText }
+                .ifBlank { episodeText }
+                .ifBlank { "حلقة ${numberText.ifBlank { "" }}" }
+        )
 
         return SEpisode.create().apply {
             this.url = url
-
-            name = cleanTitle(
-                episodeName
-                    .ifBlank { episodeText }
-                    .ifBlank { "حلقة" }
-            )
-
+            name = finalName
             episode_number = number ?: -1f
             preview_url = imageUrl(element).ifBlank { null }
         }
@@ -458,13 +537,15 @@ class Anime3rb : AnimeHttpSource() {
     // --------------------------------------------------
 
     private fun decodeUrl(value: String): String {
-        return value
-            .replace("&amp;", "&")
-            .replace("&#38;", "&")
+        return Parser.unescapeEntities(value, false)
             .replace("\\/", "/")
+            .replace("\\u002F", "/")
+            .replace("\\u002f", "/")
             .replace("\\u0026", "&")
             .replace("\\", "")
             .trim()
+            .removeSurrounding("\"")
+            .removeSurrounding("'")
     }
 
     private fun appendParameter(
@@ -472,13 +553,17 @@ class Anime3rb : AnimeHttpSource() {
         name: String,
         value: String
     ): String {
+        if (url.contains("$name=")) return url
+
         val separator = if (url.contains("?")) "&" else "?"
         return "$url$separator$name=$value"
     }
 
     override fun hosterListRequest(episode: SEpisode): Request {
+        val episodeUrl = absoluteUrl(episode.url)
+
         return Request.Builder()
-            .url(episode.url)
+            .url(episodeUrl)
             .headers(
                 headers.newBuilder()
                     .set("Referer", "$baseUrl/")
@@ -498,32 +583,54 @@ class Anime3rb : AnimeHttpSource() {
             response.request.url.toString()
         )
 
-        val dataSource = doc
+        // المصدر الأساسي الذي يستخدمه الموقع.
+        var playerUrl = doc
             .selectFirst("[data-video-source]")
             ?.attr("data-video-source")
             .orEmpty()
 
-        val fallbackSource = Regex(
-            """data-video-source\s*=\s*["']([^"']+)["']"""
-        )
-            .find(html)
-            ?.groupValues
-            ?.getOrNull(1)
-            .orEmpty()
-
-        var playerUrl = decodeUrl(
-            dataSource.ifBlank { fallbackSource }
-        )
-
+        // بدائل لاستخراج رابط المشغل.
         if (playerUrl.isBlank()) {
-            return emptyList()
+            playerUrl = doc
+                .selectFirst("iframe[src]")
+                ?.attr("src")
+                .orEmpty()
         }
 
-        playerUrl = absoluteUrl(playerUrl)
+        if (playerUrl.isBlank()) {
+            playerUrl = doc
+                .selectFirst("[data-src]")
+                ?.attr("data-src")
+                .orEmpty()
+        }
+
+        if (playerUrl.isBlank()) {
+            val patterns = listOf(
+                Regex("""data-video-source\s*=\s*["']([^"']+)["']"""),
+                Regex("""videoSource\s*[:=]\s*["']([^"']+)["']"""),
+                Regex("""playerUrl\s*[:=]\s*["']([^"']+)["']"""),
+                Regex("""iframe\s*[:=]\s*["']([^"']+)["']""")
+            )
+
+            for (pattern in patterns) {
+                val found = pattern.find(html)
+                    ?.groupValues
+                    ?.getOrNull(1)
+                    .orEmpty()
+
+                if (found.isNotBlank()) {
+                    playerUrl = found
+                    break
+                }
+            }
+        }
+
+        playerUrl = absoluteUrl(decodeUrl(playerUrl))
 
         if (
-            !playerUrl.startsWith("https://") &&
-            !playerUrl.startsWith("http://")
+            playerUrl.isBlank() ||
+            (!playerUrl.startsWith("https://") &&
+                !playerUrl.startsWith("http://"))
         ) {
             return emptyList()
         }
@@ -542,19 +649,19 @@ class Anime3rb : AnimeHttpSource() {
             ?.groupValues
             ?.getOrNull(1)
 
-        if (cinema != null && !playerUrl.contains("cinema=")) {
-            playerUrl = appendParameter(playerUrl, "cinema", cinema)
-        }
-
-        if (last != null && !playerUrl.contains("last=")) {
-            playerUrl = appendParameter(playerUrl, "last", last)
-        }
-
-        if (!playerUrl.contains("next-image=")) {
+        if (cinema != null) {
             playerUrl = appendParameter(
                 playerUrl,
-                "next-image",
-                "undefined"
+                "cinema",
+                cinema
+            )
+        }
+
+        if (last != null) {
+            playerUrl = appendParameter(
+                playerUrl,
+                "last",
+                last
             )
         }
 
@@ -567,66 +674,101 @@ class Anime3rb : AnimeHttpSource() {
     }
 
     // --------------------------------------------------
-    // VIDEO EXTRACTION
+    // VIDEO EXTRACTION HELPERS
     // --------------------------------------------------
 
-    override fun videoListRequest(hoster: Hoster): Request {
-        return Request.Builder()
-            .url(hoster.hosterUrl)
-            .headers(
-                headers.newBuilder()
-                    .set("Referer", hoster.hosterUrl)
-                    .build()
+    private fun makeVideo(
+        source: String,
+        label: String
+    ): Video? {
+        val sourceUrl = absoluteUrl(decodeUrl(source))
+
+        if (
+            sourceUrl.isBlank() ||
+            (!sourceUrl.startsWith("https://") &&
+                !sourceUrl.startsWith("http://"))
+        ) {
+            return null
+        }
+
+        if (
+            sourceUrl.endsWith(".m3u8", true) ||
+            sourceUrl.endsWith(".mp4", true) ||
+            sourceUrl.contains(".m3u8?") ||
+            sourceUrl.contains(".mp4?")
+        ) {
+            val resolution = Regex("""\d+""")
+                .find(label)
+                ?.value
+                ?.toIntOrNull()
+
+            val videoHeaders = Headers.Builder()
+                .add("User-Agent", userAgent)
+                .add("Referer", "$baseUrl/")
+                .build()
+
+            return Video(
+                videoUrl = sourceUrl,
+                videoTitle = "Anime3rb $label",
+                resolution = resolution,
+                headers = videoHeaders,
+                preferred = resolution != null && resolution >= 720
             )
-            .get()
-            .build()
+        }
+
+        return null
     }
 
     private fun extractJsonVideoSources(html: String): List<Video> {
-        val match = Regex(
-            """var\s+video_sources\s*=\s*(\[[\s\S]*?]);"""
-        ).find(html) ?: return emptyList()
+        val patterns = listOf(
+            Regex("""var\s+video_sources\s*=\s*(\[[\s\S]*?]);"""),
+            Regex("""video_sources\s*=\s*(\[[\s\S]*?]);"""),
+            Regex(""""video_sources"\s*:\s*(\[[\s\S]*?])""")
+        )
+
+        var arrayText = ""
+
+        for (pattern in patterns) {
+            arrayText = pattern.find(html)
+                ?.groupValues
+                ?.getOrNull(1)
+                .orEmpty()
+
+            if (arrayText.isNotBlank()) break
+        }
+
+        if (arrayText.isBlank()) return emptyList()
 
         return try {
-            val sources = JSONArray(match.groupValues[1])
+            val sources = JSONArray(arrayText)
 
             buildList {
                 for (index in 0 until sources.length()) {
                     val item = sources.optJSONObject(index)
                         ?: continue
 
-                    val sourceUrl = absoluteUrl(
-                        decodeUrl(item.optString("src"))
-                    )
-
-                    if (
-                        sourceUrl.isBlank() ||
-                        item.optBoolean("premium", false)
-                    ) {
+                    if (item.optBoolean("premium", false)) {
                         continue
                     }
 
-                    val label = item.optString("label", "Auto")
+                    val source = item.optString("src")
+                        .ifBlank {
+                            item.optString("file")
+                        }
+                        .ifBlank {
+                            item.optString("url")
+                        }
 
-                    val resolution = Regex("""\d+""")
-                        .find(label)
-                        ?.value
-                        ?.toIntOrNull()
+                    val label = item.optString("label")
+                        .ifBlank {
+                            item.optString("quality", "Auto")
+                        }
 
-                    val videoHeaders = Headers.Builder()
-                        .add("User-Agent", userAgent)
-                        .add("Referer", "$baseUrl/")
-                        .build()
+                    val video = makeVideo(source, label)
 
-                    add(
-                        Video(
-                            videoUrl = sourceUrl,
-                            videoTitle = "Anime3rb $label",
-                            resolution = resolution,
-                            headers = videoHeaders,
-                            preferred = resolution != null && resolution >= 720
-                        )
-                    )
+                    if (video != null) {
+                        add(video)
+                    }
                 }
             }
         } catch (_: Exception) {
@@ -635,19 +777,33 @@ class Anime3rb : AnimeHttpSource() {
     }
 
     private fun extractJavaScriptVideoSources(html: String): List<Video> {
-        val match = Regex(
-            """var\s+videos\s*=\s*(\[[\s\S]*?]);"""
-        ).find(html) ?: return emptyList()
+        val patterns = listOf(
+            Regex("""var\s+videos\s*=\s*(\[[\s\S]*?]);"""),
+            Regex("""videos\s*=\s*(\[[\s\S]*?]);""")
+        )
 
-        val arrayContent = match.groupValues[1]
-        val objects = Regex("""\{[^{}]*}""").findAll(arrayContent)
+        var arrayContent = ""
+
+        for (pattern in patterns) {
+            arrayContent = pattern.find(html)
+                ?.groupValues
+                ?.getOrNull(1)
+                .orEmpty()
+
+            if (arrayContent.isNotBlank()) break
+        }
+
+        if (arrayContent.isBlank()) return emptyList()
+
+        val objects = Regex("""\{[^{}]*}""")
+            .findAll(arrayContent)
 
         return buildList {
             for (objectMatch in objects) {
                 val item = objectMatch.value
 
                 val source = Regex(
-                    """\bsrc\s*:\s*(['"])(.*?)\1"""
+                    """\b(?:src|file|url)\s*:\s*(['"])(.*?)\1"""
                 )
                     .find(item)
                     ?.groupValues
@@ -655,40 +811,87 @@ class Anime3rb : AnimeHttpSource() {
                     .orEmpty()
 
                 val label = Regex(
-                    """\blabel\s*:\s*(['"])(.*?)\1"""
+                    """\b(?:label|quality|title)\s*:\s*(['"])(.*?)\1"""
                 )
                     .find(item)
                     ?.groupValues
                     ?.getOrNull(2)
                     .orEmpty()
+                    .ifBlank { "Auto" }
 
-                val sourceUrl = absoluteUrl(decodeUrl(source))
+                val video = makeVideo(source, label)
 
-                if (sourceUrl.isBlank()) continue
-
-                val quality = label.ifBlank { "Auto" }
-
-                val resolution = Regex("""\d+""")
-                    .find(quality)
-                    ?.value
-                    ?.toIntOrNull()
-
-                val videoHeaders = Headers.Builder()
-                    .add("User-Agent", userAgent)
-                    .add("Referer", "$baseUrl/")
-                    .build()
-
-                add(
-                    Video(
-                        videoUrl = sourceUrl,
-                        videoTitle = "Anime3rb $quality",
-                        resolution = resolution,
-                        headers = videoHeaders,
-                        preferred = resolution != null && resolution >= 720
-                    )
-                )
+                if (video != null) {
+                    add(video)
+                }
             }
         }
+    }
+
+    private fun extractHtmlVideoSources(html: String): List<Video> {
+        val doc = Jsoup.parse(html)
+
+        val elements = doc.select(
+            "video[src], video source[src], source[src]"
+        )
+
+        return elements.mapNotNull { element ->
+            val source = element.attr("src")
+            val label = element.attr("label")
+                .ifBlank {
+                    element.attr("size")
+                }
+                .ifBlank {
+                    element.attr("res")
+                }
+                .ifBlank {
+                    "Auto"
+                }
+
+            makeVideo(source, label)
+        }
+    }
+
+    private fun extractRegexVideoSources(html: String): List<Video> {
+        val patterns = listOf(
+            Regex("""(?:file|src|url)\s*[:=]\s*["'](https?://[^"']+\.(?:mp4|m3u8)(?:\?[^"']*)?)["']"""),
+            Regex("""["'](https?://[^"']+\.(?:mp4|m3u8)(?:\?[^"']*)?)["']""")
+        )
+
+        return buildList {
+            for (pattern in patterns) {
+                for (match in pattern.findAll(html)) {
+                    val source = match.groupValues
+                        .lastOrNull()
+                        .orEmpty()
+
+                    val video = makeVideo(source, "Auto")
+
+                    if (video != null) {
+                        add(video)
+                    }
+                }
+            }
+        }
+    }
+
+    // --------------------------------------------------
+    // VIDEO EXTRACTION
+    // --------------------------------------------------
+
+    override fun videoListRequest(hoster: Hoster): Request {
+        val playerUrl = absoluteUrl(hoster.hosterUrl)
+
+        return Request.Builder()
+            .url(playerUrl)
+            .headers(
+                headers.newBuilder()
+                    .set("Referer", "$baseUrl/")
+                    .set("Accept", "*/*")
+                    .build()
+            )
+            .get()
+            .build()
     }
 
     override fun videoListParse(
@@ -699,18 +902,24 @@ class Anime3rb : AnimeHttpSource() {
 
         if (html.isBlank()) return emptyList()
 
-        val javascriptVideos = extractJavaScriptVideoSources(html)
+        val results = mutableListOf<Video>()
 
-        if (javascriptVideos.isNotEmpty()) {
-            return javascriptVideos.distinctBy { it.videoUrl }
-        }
+        results.addAll(
+            extractJavaScriptVideoSources(html)
+        )
 
-        val jsonVideos = extractJsonVideoSources(html)
+        results.addAll(
+            extractJsonVideoSources(html)
+        )
 
-        if (jsonVideos.isNotEmpty()) {
-            return jsonVideos.distinctBy { it.videoUrl }
-        }
+        results.addAll(
+            extractHtmlVideoSources(html)
+        )
 
-        return emptyList()
+        results.addAll(
+            extractRegexVideoSources(html)
+        )
+
+        return results.distinctBy { it.videoUrl }
     }
 }
