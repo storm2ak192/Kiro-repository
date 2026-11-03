@@ -41,7 +41,7 @@ jobs:
 
           if [ "$EXTENSION" = "all" ]; then
             echo "Building all extensions..."
-            ./gradlew assembleDebug
+            ./gradlew assembleDebug --stacktrace
           else
             if [[ ! "$EXTENSION" =~ ^[a-z0-9_-]+/[a-z0-9_-]+$ ]]; then
               echo "Invalid extension format."
@@ -53,7 +53,7 @@ jobs:
 
             echo "Building: $LANGUAGE/$NAME"
 
-            ./gradlew ":src:${LANGUAGE}:${NAME}:assembleDebug"
+            ./gradlew ":src:${LANGUAGE}:${NAME}:assembleDebug" --stacktrace
           fi
 
       - name: Upload APK Files
