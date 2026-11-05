@@ -29,6 +29,7 @@ import org.jsoup.parser.Parser
 import java.net.URLEncoder
 
 class Anime3rb : AnimeHttpSource(), ConfigurableAnimeSource {
+    // Build verification after adding configurable source preferences.
 
     override val name = "Anime3rb"
     private val sourcePrefs by lazy {
