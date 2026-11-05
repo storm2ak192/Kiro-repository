@@ -1,6 +1,14 @@
 package eu.kanade.tachiyomi.animeextension.ar.animewitcher
 
+import androidx.preference.ListPreference
+import androidx.preference.PreferenceScreen
+import android.app.Application
+import android.content.Context
+import uy.kohesive.injekt.Injekt
+import uy.kohesive.injekt.api.get
+import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimeFilterList
+import eu.kanade.tachiyomi.animesource.model.HttpServer
 import eu.kanade.tachiyomi.animesource.model.AnimeRelation
 import eu.kanade.tachiyomi.animesource.model.AnimeUpdateStrategy
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
@@ -25,7 +33,33 @@ import java.net.URLEncoder
 import java.net.URLDecoder
 import java.util.Locale
 
-class AnimeWitcher : AnimeHttpSource() {
+class AnimeWitcher : AnimeHttpSource(), ConfigurableAnimeSource {
+    private val sourcePrefs by lazy {
+        Injekt.get<Application>().getSharedPreferences("source_$id", Context.MODE_PRIVATE)
+    }
+
+    override fun createHttpServer(): HttpServer = HttpServer()
+
+    override fun setupPreferenceScreen(screen: PreferenceScreen) {
+        ListPreference(screen.context).apply {
+            key = PREF_PREFERRED_SERVER
+            title = "السيرفر المفضل"
+            entries = arrayOf("تلقائي - الأعلى جودة", "MF", "ST", "MG", "BU", "QI", "AR", "WC", "PD", "KF", "VT")
+            entryValues = arrayOf("auto", "MF", "ST", "MG", "BU", "QI", "AR", "WC", "PD", "KF", "VT")
+            setDefaultValue("auto")
+            summary = "السيرفر المفضل: %s"
+        }.also(screen::addPreference)
+    }
+
+    private fun orderServers(servers: List<Server>): List<Server> {
+        val preferred = sourcePrefs.getString(PREF_PREFERRED_SERVER, "auto") ?: "auto"
+        return if (preferred == "auto") {
+            servers.sortedWith(compareByDescending<Server> { it.quality.filter(Char::isDigit).toIntOrNull() ?: 0 }.thenBy { it.name })
+        } else {
+            servers.sortedWith(compareByDescending<Server> { it.name.equals(preferred, true) }
+                .thenByDescending { it.quality.filter(Char::isDigit).toIntOrNull() ?: 0 })
+        }
+    }
     override val name = "AnimeWitcher"
     override val baseUrl = "https://animewitcher.com"
     override val lang = "ar"
@@ -295,7 +329,7 @@ class AnimeWitcher : AnimeHttpSource() {
                 parseServerFields(f)
             }
         }.getOrDefault(emptyList())
-        if (primary.isNotEmpty()) return primary.sortedByDescending { it.quality.filter(Char::isDigit).toIntOrNull() ?: 0 }
+        if (primary.isNotEmpty()) return orderServers(primary)
 
         val fallbackPath = "anime_list/$anime/episodes/$episode/servers"
         return runCatching {
@@ -305,7 +339,7 @@ class AnimeWitcher : AnimeHttpSource() {
                 val visible = fields.optJSONObject("visible")?.optBoolean("booleanValue") ?: true
                 if (!visible) null else parseServerFields(fields)
             }.sortedByDescending { it.quality.filter(Char::isDigit).toIntOrNull() ?: 0 }
-        }.getOrDefault(emptyList())
+        }.getOrDefault(emptyList()).let(::orderServers)
     }
 
     private fun getServerWords(serverName: String): List<String?> {
@@ -421,14 +455,40 @@ class AnimeWitcher : AnimeHttpSource() {
         }
 
         val html = runCatching {
-            val req = Request.Builder().url(resolved).headers(headers).get().build()
+            val origin = Regex("""^https?://[^/]+""", RegexOption.IGNORE_CASE).find(resolved)?.value?.plus("/") ?: "$baseUrl/"
+            val req = Request.Builder().url(resolved)
+                .headers(headers.newBuilder().set("Referer", origin).build())
+                .get().build()
             execute(req)
         }.getOrDefault("")
-        val mediaUrl = Regex("""(?:file|src|source)\s*[:=]\s*["'](https?:[^"']+)""", RegexOption.IGNORE_CASE)
-            .find(html)?.groupValues?.get(1)?.replace("&amp;", "&")
-            ?: Regex("""https?://[^"'\s]+\.(?:mp4|m3u8|mpd)(?:\?[^"'\s]*)?""", RegexOption.IGNORE_CASE)
-                .find(html)?.value?.replace("&amp;", "&")
-        val finalUrl = mediaUrl ?: return emptyList()
+
+        val candidates = linkedSetOf<String>()
+        fun addCandidate(raw: String?) {
+            val value = raw.orEmpty().replace("\\\\/", "/").replace("\\\\u0026", "&")
+                .replace("&amp;", "&").replace("\\\\", "").trim().trim('"', '\'', ' ')
+            val normalized = when {
+                value.startsWith("//") -> "https:$value"
+                value.startsWith("http://") || value.startsWith("https://") -> value
+                else -> ""
+            }
+            if (normalized.isNotBlank() &&
+                Regex("""(?i)\\.(m3u8|mp4|mpd|m4v|webm)(?:$|[?&])""").containsMatchIn(normalized)
+            ) candidates += normalized
+        }
+
+        Regex("""(?is)<(?:source|video)[^>]+(?:src|data-src)=["']([^"']+)""")
+            .findAll(html).forEach { addCandidate(it.groupValues[1]) }
+        Regex("""(?is)(?:file|src|source|hls|url|video_url)\\s*[:=]\\s*["']([^"']+)""")
+            .findAll(html).forEach { addCandidate(it.groupValues[1]) }
+        Regex("""(?i)https?:\\?/\\?/[^"'\\s<>]+?\\.(?:m3u8|mp4|mpd|m4v|webm)(?:\\?[^"'\\s<>]*)?""")
+            .findAll(html).forEach { addCandidate(it.value) }
+        Regex("""(?i)//[^"'\\s<>]+?\\.(?:m3u8|mp4|mpd|m4v|webm)(?:\\?[^"'\\s<>]*)?""")
+            .findAll(html).forEach { addCandidate(it.value) }
+
+        val finalUrl = candidates.firstOrNull() ?: resolved.takeIf {
+            Regex("""(?i)\\.(m3u8|mp4|mpd|m4v|webm)(?:$|[?&])""").containsMatchIn(it)
+        } ?: return emptyList()
+
         return listOf(Video(
             videoUrl = finalUrl,
             videoTitle = "${server.name} ${server.quality}".trim(),
@@ -440,4 +500,8 @@ class AnimeWitcher : AnimeHttpSource() {
 
     override fun List<Video>.sortVideos(): List<Video> =
         sortedWith(compareByDescending<Video> { it.preferred }.thenByDescending { it.resolution ?: 0 })
+
+    companion object {
+        private const val PREF_PREFERRED_SERVER = "animewitcher_preferred_server"
+    }
 }
