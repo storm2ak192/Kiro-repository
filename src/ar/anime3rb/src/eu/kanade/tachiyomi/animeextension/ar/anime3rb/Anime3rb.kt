@@ -233,7 +233,7 @@ class Anime3rb : AnimeHttpSource(), ConfigurableAnimeSource {
     override fun latestUpdatesRequest(page: Int): Request {
         return Request.Builder()
             .url("$baseUrl/")
-            .headers(headers)
+            .headers(currentHeaders())
             .get()
             .build()
     }
@@ -267,7 +267,7 @@ class Anime3rb : AnimeHttpSource(), ConfigurableAnimeSource {
         return try {
             val homeRequest = Request.Builder()
                 .url("$baseUrl/")
-                .headers(headers)
+                .headers(currentHeaders())
                 .get()
                 .build()
 
@@ -379,7 +379,7 @@ class Anime3rb : AnimeHttpSource(), ConfigurableAnimeSource {
 
         return Request.Builder()
             .url("$baseUrl/titles/list?search=$encodedQuery&page=$page")
-            .headers(headers)
+            .headers(currentHeaders())
             .get()
             .build()
     }
@@ -406,7 +406,7 @@ class Anime3rb : AnimeHttpSource(), ConfigurableAnimeSource {
         return Request.Builder()
             .url(url)
             .headers(
-                headers.newBuilder()
+                currentHeaders().newBuilder()
                     .set("Referer", "$baseUrl/")
                     .build()
             )
@@ -472,7 +472,7 @@ class Anime3rb : AnimeHttpSource(), ConfigurableAnimeSource {
         return Request.Builder()
             .url(animeUrl)
             .headers(
-                headers.newBuilder()
+                currentHeaders().newBuilder()
                     .set("Referer", "$baseUrl/")
                     .build()
             )
@@ -546,7 +546,7 @@ class Anime3rb : AnimeHttpSource(), ConfigurableAnimeSource {
         return Request.Builder()
             .url(episodeUrl)
             .headers(
-                headers.newBuilder()
+                currentHeaders().newBuilder()
                     .set("Referer", "$baseUrl/")
                     .build()
             )
@@ -596,7 +596,7 @@ class Anime3rb : AnimeHttpSource(), ConfigurableAnimeSource {
         return Request.Builder()
             .url(hoster.hosterUrl)
             .headers(
-                headers.newBuilder()
+                currentHeaders().newBuilder()
                     .set("Host", "video.vid3rb.com")
                     .set("User-Agent", userAgent)
                     .set("Referer", "$baseUrl/")
