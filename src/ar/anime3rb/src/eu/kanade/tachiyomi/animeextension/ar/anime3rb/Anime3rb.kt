@@ -1,3 +1,4 @@
+// Build verification: external-player HTTP server URL detection update.
 package eu.kanade.tachiyomi.animeextension.ar.anime3rb
 
 import androidx.preference.EditTextPreference
