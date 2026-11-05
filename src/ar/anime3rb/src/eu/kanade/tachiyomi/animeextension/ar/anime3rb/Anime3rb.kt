@@ -3,6 +3,10 @@ package eu.kanade.tachiyomi.animeextension.ar.anime3rb
 import androidx.preference.EditTextPreference
 import androidx.preference.ListPreference
 import androidx.preference.PreferenceScreen
+import android.app.Application
+import android.content.Context
+import uy.kohesive.injekt.Injekt
+import uy.kohesive.injekt.api.get
 import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
 import eu.kanade.tachiyomi.animesource.model.FetchType
@@ -27,9 +31,12 @@ import java.net.URLEncoder
 class Anime3rb : AnimeHttpSource(), ConfigurableAnimeSource {
 
     override val name = "Anime3rb"
+    private val sourcePrefs by lazy {
+        Injekt.get<Application>().getSharedPreferences("source_$id", Context.MODE_PRIVATE)
+    }
+
     override val baseUrl: String
-        get() = getSourcePreferences()
-            .getString(PREF_BASE_URL, DEFAULT_BASE_URL)!!
+        get() = sourcePrefs.getString(PREF_BASE_URL, DEFAULT_BASE_URL)!!
             .trim()
             .trimEnd('/')
     override val lang = "ar"
@@ -693,7 +700,7 @@ class Anime3rb : AnimeHttpSource(), ConfigurableAnimeSource {
         val uniqueResults = results.distinctBy { it.videoUrl }
         if (uniqueResults.isEmpty()) return emptyList()
 
-        val requestedQuality = getSourcePreferences()
+        val requestedQuality = sourcePrefs
             .getString(PREF_QUALITY, "auto")
             ?: "auto"
         val targetResolution = requestedQuality.toIntOrNull()
