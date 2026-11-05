@@ -667,7 +667,7 @@ class Anime3rb : AnimeHttpSource(), ConfigurableAnimeSource {
                     .replace("\\u0026", "&")
                     .trim()
 
-                val needsLocalServer = Regex("(?i)^http://localhost:1(?:/|$)")
+                val needsLocalServer = Regex("""(?i)http://localhost:1(?!\d)""")
                     .containsMatchIn(source)
 
                 if (
