@@ -1,15 +1,12 @@
 name: Kiro Universal Extension Builder
 
 on:
-  push:
-    paths:
-      - 'src/ar/animewitcher/**'
   workflow_dispatch:
     inputs:
       extension:
         description: 'Extension to build (example: ar/anime3rb) or all'
         required: true
-        default: 'ar/animewitcher'
+        default: 'ar/anime3rb'
         type: string
 
 permissions:
@@ -38,7 +35,7 @@ jobs:
 
       - name: Build Selected Extension
         env:
-          EXTENSION: ${{ inputs.extension || 'ar/animewitcher' }}
+          EXTENSION: ${{ inputs.extension || 'ar/anime3rb' }}
         run: |
           chmod +x gradlew
 
