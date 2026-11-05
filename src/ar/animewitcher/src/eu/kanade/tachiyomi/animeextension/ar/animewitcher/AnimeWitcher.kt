@@ -33,6 +33,7 @@ import java.net.URLEncoder
 import java.net.URLDecoder
 import java.util.Locale
 
+// Includes source HTTP server support required by Aniyomi external players.
 class AnimeWitcher : AnimeHttpSource(), ConfigurableAnimeSource {
     private val sourcePrefs by lazy {
         Injekt.get<Application>().getSharedPreferences("source_$id", Context.MODE_PRIVATE)
