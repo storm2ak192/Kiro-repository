@@ -41,7 +41,7 @@ jobs:
 
       - name: Build Selected Extension
         env:
-          EXTENSION: ${{ inputs.extension }}
+          EXTENSION: ${{ inputs.extension || 'ar/anime3rb' }}
         run: |
           chmod +x gradlew
 
