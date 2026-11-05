@@ -1,6 +1,9 @@
 name: Kiro Universal Extension Builder
 
 on:
+  push:
+    paths:
+      - 'src/ar/animewitcher/**'
   workflow_dispatch:
     inputs:
       extension:
