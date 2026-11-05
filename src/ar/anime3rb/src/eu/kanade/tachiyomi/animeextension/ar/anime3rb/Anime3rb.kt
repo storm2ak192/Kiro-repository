@@ -348,6 +348,24 @@ class Anime3rb : AnimeHttpSource() {
     }
 
     // --------------------------------------------------
+    // ANIME DETAILS REQUEST
+    // --------------------------------------------------
+    // Aniyomi's default request builder may concatenate baseUrl with anime.url.
+    // The cards currently store absolute URLs, so build the request explicitly.
+    override fun animeDetailsRequest(anime: SAnime): Request {
+        val url = absoluteUrl(anime.url)
+        return Request.Builder()
+            .url(url)
+            .headers(
+                headers.newBuilder()
+                    .set("Referer", "$baseUrl/")
+                    .build()
+            )
+            .get()
+            .build()
+    }
+
+    // --------------------------------------------------
     // ANIME DETAILS
     // --------------------------------------------------
 
@@ -416,51 +434,57 @@ class Anime3rb : AnimeHttpSource() {
     override fun episodeListParse(response: Response): List<SEpisode> {
         val doc = document(response)
 
-        // نفس محدد الحلقات المستخدم في إضافة CloudStream الأصلية.
-        // ونفس ترتيب الحلقات: reversed.
-        return doc.select(".video-list a")
-            .asReversed()
+        // The current site uses /episode/<anime>/<number> links.
+        // Keep the older selector as a fallback for alternate page layouts.
+        val episodeLinks = (
+            doc.select("a[href*=/episode/], .video-list a")
+            ).distinctBy { it.attr("href") }
+
+        return episodeLinks
             .mapNotNull { element ->
-
                 val href = absoluteUrl(element.attr("href"))
-
-                if (href.isBlank()) {
-                    return@mapNotNull null
-                }
+                if (href.isBlank()) return@mapNotNull null
 
                 val videoData = element.selectFirst(".video-data")
+                val children = videoData?.children()
+                val linkText = element.text().replace(Regex("\\s+"), " ").trim()
 
-                val episodeText = videoData
-                    ?.children()
-                    ?.getOrNull(0)
-                    ?.text()
-                    .orEmpty()
+                val episodeText = children?.getOrNull(0)?.text()
+                    ?.takeIf { it.isNotBlank() }
+                    ?: Regex("(?i)الحلقة\\s*([0-9٠-٩]+)").find(linkText)?.value.orEmpty()
 
-                val episodeName = videoData
-                    ?.children()
-                    ?.getOrNull(1)
-                    ?.text()
-                    .orEmpty()
+                val episodeName = children?.getOrNull(1)?.text()
+                    ?.takeIf { it.isNotBlank() }
+                    ?: linkText
+                        .replace(Regex("(?i)الحلقة\\s*[0-9٠-٩]+"), "")
+                        .replace(Regex("^\\d{1,2}:\\d{2}\\s*"), "")
+                        .trim()
 
-                val episodeNumber = episodeText
-                    .filter { it.isDigit() }
-                    .toIntOrNull()
-                    ?.toFloat()
+                val numberText = Regex("[0-9٠-٩]+").find(episodeText)?.value
+                    ?: Regex("[0-9٠-٩]+").find(linkText)?.value
+                val episodeNumber = numberText
+                    ?.map { char ->
+                        when (char) {
+                            in '٠'..'٩' -> char.code - '٠'.code
+                            else -> char.digitToIntOrNull() ?: -1
+                        }
+                    }
+                    ?.joinToString("")
+                    ?.toFloatOrNull()
 
-                val episodePoster = element
-                    .selectFirst("img")
-                    ?.attr("src")
-                    ?.let { absoluteUrl(it) }
+                val episodePoster = element.selectFirst("img")
+                    ?.let { imageUrl(element) }
                     .orEmpty()
 
                 SEpisode.create().apply {
                     url = href
-                    name = episodeName.ifBlank { episodeText }
+                    name = episodeName.ifBlank { episodeText.ifBlank { linkText } }
                     episode_number = episodeNumber ?: -1f
                     preview_url = episodePoster.ifBlank { null }
                 }
             }
             .distinctBy { it.url }
+            .sortedBy { it.episode_number.takeIf { number -> number >= 0f } ?: Float.MAX_VALUE }
     }
 
     // --------------------------------------------------
