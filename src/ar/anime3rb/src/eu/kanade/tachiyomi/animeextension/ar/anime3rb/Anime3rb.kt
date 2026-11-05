@@ -1,5 +1,9 @@
 package eu.kanade.tachiyomi.animeextension.ar.anime3rb
 
+import androidx.preference.EditTextPreference
+import androidx.preference.ListPreference
+import androidx.preference.PreferenceScreen
+import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
 import eu.kanade.tachiyomi.animesource.model.FetchType
 import eu.kanade.tachiyomi.animesource.model.Hoster
@@ -20,10 +24,14 @@ import org.jsoup.nodes.Element
 import org.jsoup.parser.Parser
 import java.net.URLEncoder
 
-class Anime3rb : AnimeHttpSource() {
+class Anime3rb : AnimeHttpSource(), ConfigurableAnimeSource {
 
     override val name = "Anime3rb"
-    override val baseUrl = "https://anime3rb.com"
+    override val baseUrl: String
+        get() = getSourcePreferences()
+            .getString(PREF_BASE_URL, DEFAULT_BASE_URL)!!
+            .trim()
+            .trimEnd('/')
     override val lang = "ar"
     override val supportsLatest = true
     override val supportsRelatedAnime = false
@@ -32,11 +40,52 @@ class Anime3rb : AnimeHttpSource() {
         "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 " +
             "(KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
 
-    override fun headersBuilder(): Headers.Builder =
+    private fun currentHeaders(referer: String = "$baseUrl/"): Headers =
         Headers.Builder()
             .add("User-Agent", userAgent)
-            .add("Referer", "$baseUrl/")
+            .add("Referer", referer)
             .add("Accept-Language", "ar,en-US;q=0.9,en;q=0.8")
+            .build()
+
+    override fun headersBuilder(): Headers.Builder = currentHeaders().newBuilder()
+
+    override fun setupPreferenceScreen(screen: PreferenceScreen) {
+        EditTextPreference(screen.context).apply {
+            key = PREF_BASE_URL
+            title = "رابط الموقع"
+            dialogTitle = "تغيير رابط Anime3rb"
+            dialogMessage = "أدخل رابط الموقع الجديد، مثال: https://anime3rb.com"
+            setDefaultValue(DEFAULT_BASE_URL)
+            summary = "الرابط الحالي: %s"
+            setOnPreferenceChangeListener { _, newValue ->
+                val value = newValue.toString().trim().trimEnd('/')
+                Regex("^https?://[^/\\s]+(?:/.*)?$", RegexOption.IGNORE_CASE).matches(value)
+            }
+        }.also(screen::addPreference)
+
+        ListPreference(screen.context).apply {
+            key = PREF_QUALITY
+            title = "جودة التشغيل الافتراضية"
+            entries = arrayOf("تلقائي - أعلى جودة", "1080p", "720p", "480p", "360p", "240p")
+            entryValues = arrayOf("auto", "1080", "720", "480", "360", "240")
+            setDefaultValue("auto")
+            summary = "الجودة المحددة: %s"
+        }.also(screen::addPreference)
+    }
+
+    private fun sitePageUrl(value: String?): String {
+        val url = absoluteUrl(value)
+        val parsed = runCatching { java.net.URI(url) }.getOrNull() ?: return url
+        val host = parsed.host.orEmpty()
+        if (!host.equals("anime3rb.com", true) && !host.equals("www.anime3rb.com", true)) {
+            return url
+        }
+
+        val path = parsed.rawPath.orEmpty().ifBlank { "/" }
+        val query = parsed.rawQuery?.let { "?$it" }.orEmpty()
+        val fragment = parsed.rawFragment?.let { "#$it" }.orEmpty()
+        return "$baseUrl$path$query$fragment"
+    }
 
     // --------------------------------------------------
     // URL NORMALIZATION
@@ -117,7 +166,7 @@ class Anime3rb : AnimeHttpSource() {
                 element.selectFirst("a[href]")?.attr("href").orEmpty()
             }
 
-        val url = absoluteUrl(rawUrl)
+        val url = sitePageUrl(rawUrl)
 
         if (title.isBlank() || url.isBlank()) return null
 
@@ -152,7 +201,7 @@ class Anime3rb : AnimeHttpSource() {
     override fun popularAnimeRequest(page: Int): Request {
         return Request.Builder()
             .url("$baseUrl/titles/list?page=$page")
-            .headers(headers)
+            .headers(currentHeaders())
             .get()
             .build()
     }
@@ -160,9 +209,9 @@ class Anime3rb : AnimeHttpSource() {
     override fun popularAnimeParse(response: Response): AnimesPage {
         val doc = document(response)
 
-        val entries = doc.select("a.simple-title-card")
+        val entries = doc.select("a.simple-title-card, a[href*='/titles/']")
             .mapNotNull {
-                animeFromCard(it, "h4")
+                animeFromCard(it, "h4, h3.title-name, .title-name")
             }
             .distinctBy { it.url }
 
@@ -192,9 +241,9 @@ class Anime3rb : AnimeHttpSource() {
     override fun latestUpdatesParse(response: Response): AnimesPage {
         val doc = document(response)
 
-        val entries = doc.select("#videos a.video-card")
+        val entries = doc.select("#videos a.video-card, a.simple-title-card")
             .mapNotNull {
-                animeFromCard(it, "h3.title-name")
+                animeFromCard(it, "h3.title-name, h4, .title-name")
             }
             .distinctBy { it.url }
 
@@ -269,7 +318,7 @@ class Anime3rb : AnimeHttpSource() {
             val request = Request.Builder()
                 .url(updateUrl)
                 .headers(
-                    headers.newBuilder()
+                    currentHeaders().newBuilder()
                         .set("Accept", "*/*")
                         .set("X-Livewire", "1")
                         .set("Content-Type", "application/json")
@@ -353,7 +402,7 @@ class Anime3rb : AnimeHttpSource() {
     // Aniyomi's default request builder may concatenate baseUrl with anime.url.
     // The cards currently store absolute URLs, so build the request explicitly.
     override fun animeDetailsRequest(anime: SAnime): Request {
-        val url = absoluteUrl(anime.url)
+        val url = sitePageUrl(anime.url)
         return Request.Builder()
             .url(url)
             .headers(
@@ -398,7 +447,7 @@ class Anime3rb : AnimeHttpSource() {
             .distinct()
 
         return SAnime.create().apply {
-            url = absoluteUrl(response.request.url.toString())
+            url = sitePageUrl(response.request.url.toString())
 
             this.title = cleanTitle(
                 title.ifBlank { rawTitle }
@@ -418,7 +467,7 @@ class Anime3rb : AnimeHttpSource() {
     // --------------------------------------------------
 
     override fun episodeListRequest(anime: SAnime): Request {
-        val animeUrl = absoluteUrl(anime.url)
+        val animeUrl = sitePageUrl(anime.url)
 
         return Request.Builder()
             .url(animeUrl)
@@ -442,7 +491,7 @@ class Anime3rb : AnimeHttpSource() {
 
         return episodeLinks
             .mapNotNull { element ->
-                val href = absoluteUrl(element.attr("href"))
+                val href = sitePageUrl(element.attr("href"))
                 if (href.isBlank()) return@mapNotNull null
 
                 val videoData = element.selectFirst(".video-data")
@@ -492,7 +541,7 @@ class Anime3rb : AnimeHttpSource() {
     // --------------------------------------------------
 
     override fun hosterListRequest(episode: SEpisode): Request {
-        val episodeUrl = absoluteUrl(episode.url)
+        val episodeUrl = sitePageUrl(episode.url)
 
         return Request.Builder()
             .url(episodeUrl)
@@ -610,8 +659,12 @@ class Anime3rb : AnimeHttpSource() {
                     .replace("\\u0026", "&")
                     .trim()
 
+                val needsLocalServer = Regex("(?i)^http://localhost:1(?:/|$)")
+                    .containsMatchIn(source)
+
                 if (
                     source.isBlank() ||
+                    needsLocalServer ||
                     (!source.startsWith("https://") &&
                         !source.startsWith("http://"))
                 ) {
@@ -637,6 +690,39 @@ class Anime3rb : AnimeHttpSource() {
             }
         }
 
-        return results.distinctBy { it.videoUrl }
+        val uniqueResults = results.distinctBy { it.videoUrl }
+        if (uniqueResults.isEmpty()) return emptyList()
+
+        val requestedQuality = getSourcePreferences()
+            .getString(PREF_QUALITY, "auto")
+            ?: "auto"
+        val targetResolution = requestedQuality.toIntOrNull()
+
+        val preferredVideo = if (targetResolution == null) {
+            uniqueResults.maxByOrNull { it.resolution ?: -1 }
+        } else {
+            uniqueResults.firstOrNull { it.resolution == targetResolution }
+                ?: uniqueResults
+                    .filter { (it.resolution ?: Int.MAX_VALUE) <= targetResolution }
+                    .maxByOrNull { it.resolution ?: -1 }
+                ?: uniqueResults.minByOrNull { it.resolution ?: Int.MAX_VALUE }
+        }
+
+        return uniqueResults.map { video ->
+            video.copy(preferred = video.videoUrl == preferredVideo?.videoUrl)
+        }
+    }
+
+    override fun List<Video>.sortVideos(): List<Video> {
+        return sortedWith(
+            compareByDescending<Video> { it.preferred }
+                .thenByDescending { it.resolution ?: 0 }
+        )
+    }
+
+    companion object {
+        private const val DEFAULT_BASE_URL = "https://anime3rb.com"
+        private const val PREF_BASE_URL = "anime3rb_base_url"
+        private const val PREF_QUALITY = "anime3rb_preferred_quality"
     }
 }
