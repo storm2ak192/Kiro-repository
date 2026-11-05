@@ -1,10 +1,6 @@
 name: Kiro Universal Extension Builder
 
 on:
-  push:
-    paths:
-      - 'src/ar/anime3rb/**'
-      - '.github/workflows/build-extensions.yml'
   workflow_dispatch:
     inputs:
       extension:
