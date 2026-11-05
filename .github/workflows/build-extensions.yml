@@ -9,7 +9,7 @@ on:
       extension:
         description: 'Extension to build (example: ar/anime3rb) or all'
         required: true
-        default: 'ar/anime3rb'
+        default: 'ar/animewitcher'
         type: string
 
 permissions:
@@ -38,7 +38,7 @@ jobs:
 
       - name: Build Selected Extension
         env:
-          EXTENSION: ${{ inputs.extension || 'ar/anime3rb' }}
+          EXTENSION: ${{ inputs.extension || 'ar/animewitcher' }}
         run: |
           chmod +x gradlew
 
