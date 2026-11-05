@@ -12,6 +12,7 @@ import eu.kanade.tachiyomi.animesource.ConfigurableAnimeSource
 import eu.kanade.tachiyomi.animesource.model.AnimesPage
 import eu.kanade.tachiyomi.animesource.model.FetchType
 import eu.kanade.tachiyomi.animesource.model.Hoster
+import eu.kanade.tachiyomi.animesource.model.HttpServer
 import eu.kanade.tachiyomi.animesource.model.SAnime
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
@@ -57,6 +58,10 @@ class Anime3rb : AnimeHttpSource(), ConfigurableAnimeSource {
             .build()
 
     override fun headersBuilder(): Headers.Builder = currentHeaders().newBuilder()
+
+    // Aniyomi starts the source HTTP server before launching any external player.
+    // Returning null makes that startup fail even when the selected video is a direct URL.
+    override fun createHttpServer(): HttpServer = HttpServer()
 
     override fun setupPreferenceScreen(screen: PreferenceScreen) {
         EditTextPreference(screen.context).apply {
