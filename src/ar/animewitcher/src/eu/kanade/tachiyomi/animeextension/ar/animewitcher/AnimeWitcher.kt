@@ -11,6 +11,9 @@ import eu.kanade.tachiyomi.animesource.model.SAnimeEpisodeUpdate
 import eu.kanade.tachiyomi.animesource.model.SEpisode
 import eu.kanade.tachiyomi.animesource.model.Video
 import eu.kanade.tachiyomi.animesource.online.AnimeHttpSource
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Headers
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
@@ -374,27 +377,27 @@ class AnimeWitcher : AnimeHttpSource() {
             Hoster(
                 hosterUrl = server.link,
                 hosterName = "${server.name} ${server.quality}".trim(),
-                internalData = JSONObject()
-                    .put("animePath", parts[0])
-                    .put("episodeId", parts[1])
-                    .put("name", server.name)
-                    .put("link", server.link)
-                    .put("quality", server.quality)
-                    .put("original", server.original)
-                    .put("openBrowser", server.openBrowser)
-                    .toString(),
+                memo = buildJsonObject {
+                    put("animePath", parts[0])
+                    put("episodeId", parts[1])
+                    put("name", server.name)
+                    put("link", server.link)
+                    put("quality", server.quality)
+                    put("original", server.original)
+                    put("openBrowser", server.openBrowser)
+                },
             )
         }
     }
 
     override suspend fun getVideoList(hoster: Hoster): List<Video> {
-        val data = runCatching { JSONObject(hoster.internalData) }.getOrNull() ?: return emptyList()
+        val data = hoster.memo
         val server = Server(
-            data.optString("name"),
-            data.optString("link"),
-            data.optString("quality"),
-            data.optString("original"),
-            data.optBoolean("openBrowser"),
+            data["name"]?.jsonPrimitive?.content.orEmpty(),
+            data["link"]?.jsonPrimitive?.content.orEmpty(),
+            data["quality"]?.jsonPrimitive?.content.orEmpty(),
+            data["original"]?.jsonPrimitive?.content.orEmpty(),
+            data["openBrowser"]?.jsonPrimitive?.content?.toBoolean() ?: false,
         )
         val resolved = resolveServer(server) ?: return emptyList()
         if (resolved.startsWith("<") || resolved.isBlank()) return emptyList()
