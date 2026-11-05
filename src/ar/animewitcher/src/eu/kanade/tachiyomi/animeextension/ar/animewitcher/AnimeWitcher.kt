@@ -315,7 +315,8 @@ class AnimeWitcher : AnimeHttpSource() {
         val link = server.link
         val words = getServerWords(server.name)
         fun page(url: String): String = runCatching {
-            val req = Request.Builder().url(url).headers(requestHeaders(url.substringBefore('/', 8) + "/")).get().build()
+            val origin = Regex("""^https?://[^/]+""", RegexOption.IGNORE_CASE).find(url)?.value?.plus("/") ?: "$baseUrl/"
+            val req = Request.Builder().url(url).headers(requestHeaders(origin)).get().build()
             execute(req)
         }.getOrDefault("")
 
